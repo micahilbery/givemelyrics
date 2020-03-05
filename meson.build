@@ -1,5 +1,5 @@
 # project name and programming language
-project('com.github.muriloventuroso.givemelyrics', 'vala', 'c', version: '0.1.2')
+project('com.github.muriloventuroso.givemelyrics', 'vala', 'c', version: '0.4.0')
 message ('project name and programming language')
 cc = meson.get_compiler('c')
 # Adds project arguments
@@ -33,6 +33,7 @@ message ('Listing dependencies')
 
 dependencies = [
     dependency('glib-2.0', version: '>=2.30.0'),
+    dependency('gtk+-3.0'),
     dependency('gio-unix-2.0', version: '>=2.20'),
     dependency('granite'),
     dependency('libsoup-2.4', version: '>=2.44'),
@@ -69,7 +70,8 @@ code_files = files(
     'src/Widgets/Preferences.vala',
     'src/Services/LyricsFetcher.vala',
     'src/Services/Settings.vala',
-    'src/Lyric.vala'
+    'src/Lyric.vala',
+    'src/MainWindow.vala'
 )
 
 message ('Defines executable')
@@ -83,3 +85,5 @@ executable(
 )
 subdir('po')
 subdir('data')
+
+meson.add_install_script('meson/post_install.py')

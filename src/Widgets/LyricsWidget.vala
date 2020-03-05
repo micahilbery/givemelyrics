@@ -22,8 +22,6 @@ const int ICON_SIZE = 64;
 namespace GiveMeLyrics {
     public class LyricsWidget : Gtk.Box{
 
-        DBusImpl impl;
-        HashTable<string,MprisClient> ifaces;
         private Gtk.Image? background = null;
         public Gtk.Window window { get; construct; }
         public string last_title;
@@ -70,12 +68,7 @@ namespace GiveMeLyrics {
             sync_running = false;
             last_position = 0;
             was_paused = false;
-            ifaces = new HashTable<string,MprisClient>(str_hash, str_equal);
 
-            Idle.add(()=> {
-                setup_dbus();
-                return false;
-            });
         }
         construct {
             fetcher = new LyricsFetcher();
@@ -205,126 +198,7 @@ namespace GiveMeLyrics {
             box_change_lyric.hide();
         }
 
-        public void setup_dbus() {
-            try {
-                impl = Bus.get_proxy_sync(BusType.SESSION, "org.freedesktop.DBus", "/org/freedesktop/DBus");
-                var names = impl.list_names();
-
-                /* Search for existing players (launched prior to our start) */
-                foreach (var name in names) {
-                    if (name.has_prefix("org.mpris.MediaPlayer2.")) {
-                        bool add = true;
-                        foreach (string name2 in ifaces.get_keys ()) {
-                            // skip if already a interface is present.
-                            // some version of vlc register two
-                            if (name2.has_prefix (name) || name.has_prefix (name2)) {
-                                add = false;
-                            }
-                        }
-                        if (add) {
-                            var iface = new_iface(name);
-                            if (iface != null) {
-                                add_iface(name, iface);
-                            }
-                        }
-                    }
-                }
-
-                /* Also check for new mpris clients coming up while we're up */
-                impl.name_owner_changed.connect((n,o,ne)=> {
-                    /* Separate.. */
-                    if (n.has_prefix("org.mpris.MediaPlayer2.")) {
-                        if (o == "") {
-                            // delay the sync because otherwise the dbus properties are not yet intialized!
-                            Timeout.add (100, () => {
-                                foreach (string name in ifaces.get_keys ()) {
-                                    // skip if already a interface is present.
-                                    // some version of vlc register two
-                                    if (name.has_prefix (n) || n.has_prefix (name)) {
-                                        return false;
-                                    }
-                                }
-                                var iface = new_iface(n);
-                                if (iface != null) {
-                                    add_iface(n, iface);
-                                }
-                                return false;
-                            });
-                        } else {
-                            Idle.add(()=> {
-                                destroy_iface(n);
-                                return false;
-                            });
-                        }
-                    }
-                });
-            } catch (Error e) {
-                warning("Failed to initialise dbus: %s", e.message);
-            }
-        }
-
-        /**
-         * Add an interface handler/widget to known list and UI
-         *
-         * @param name DBUS name (object path)
-         * @param iface The constructed MprisClient instance
-         */
-        void add_iface (string name, MprisClient iface) {
-            update_from_meta(iface, name);
-            connect_to_client(iface);
-            ifaces.insert(name, iface);
-
-        }
-
-        /**
-         * Destroy an interface handler and remove from UI
-         *
-         * @param name DBUS name to remove handler for
-         */
-        void destroy_iface(string name) {
-
-            ifaces.remove(name);
-
-        }
-
-        public MprisClient? new_iface(string busname) {
-            PlayerIface? play = null;
-            MprisClient? cl = null;
-            DbusPropIface? prop = null;
-
-            try {
-                play = Bus.get_proxy_sync(BusType.SESSION, busname, "/org/mpris/MediaPlayer2");
-            } catch (Error e) {
-                message(e.message);
-                return null;
-            }
-            try {
-                prop = Bus.get_proxy_sync(BusType.SESSION, busname, "/org/mpris/MediaPlayer2");
-            } catch (Error e) {
-                message(e.message);
-                return null;
-            }
-            cl = new MprisClient(play, prop);
-
-            return cl;
-        }
-
-        private void connect_to_client (MprisClient client) {
-            client.prop.properties_changed.connect ((i,p,inv) => {
-                if (i == "org.mpris.MediaPlayer2.Player") {
-                    /* Handle mediaplayer2 iface */
-                    p.foreach ((k,v) => {
-                        if (k == "Metadata") {
-                            update_from_meta (client, i);
-
-                        }
-                    });
-                }
-            });
-
-        }
-
-        protected void update_from_meta (MprisClient client, string i) {
+        public void update_from_meta (MprisClient client, string i) {
             var metadata = client.player.metadata;
             var playing = false;
             var must_update_lyric = false;
@@ -463,6 +337,7 @@ namespace GiveMeLyrics {
                         if(settings.sync_lyrics == true && sub != "" && sub != null){
                             Idle.add(()=> {
                                 insert_subtitle(sub);
+                                show_lyrics();
                                 return false;
                             });
                             set_sync(client, i);
@@ -478,6 +353,7 @@ namespace GiveMeLyrics {
                             box_change_lyric.hide();
                             Idle.add(()=> {
                                 insert_text(lyric);
+                                show_lyrics();
                                 return false;
                             });
                             if(settings.sync_lyrics == true){
@@ -487,10 +363,6 @@ namespace GiveMeLyrics {
                                 sync_label.hide();
                             }
                         }
-                        scrolled.get_vadjustment().set_value(0);
-                        box_spinner.hide();
-                        box_message.hide();
-                        scrolled.show();
                     }
                 } catch (Error e) {
                     warning("Failed to get lyric: %s", e.message);
@@ -516,6 +388,13 @@ namespace GiveMeLyrics {
             view.buffer.insert (ref text_start, text, text.length);
             view.buffer.get_end_iter(out text_end);
             view.buffer.apply_tag_by_name ("lyric", text_start, text_end);
+        }
+
+        private void show_lyrics(){
+            scrolled.get_vadjustment().set_value(0);
+            box_spinner.hide();
+            box_message.hide();
+            scrolled.show();
         }
 
         private void insert_subtitle(string subtitle){
@@ -545,7 +424,11 @@ namespace GiveMeLyrics {
             Timeout.add_full (Priority.DEFAULT, 500, () => {
                 try{
                     int64 position;
-                    var position_msec = client.prop.get_sync(iface_name, "Position").get_int64();
+                    int64 position_msec = 0;
+                    try{
+                        position_msec = client.prop.get_sync(iface_name, "Position").get_int64();
+                    }catch(Error e){
+                    }
                     var diff_msec = GLib.get_real_time () - msec_change_song;
                     if(position_msec == 0){
                         if(was_paused == true){
@@ -585,6 +468,9 @@ namespace GiveMeLyrics {
                                 }
                             }
                         }
+                    }
+                    if(sync_label.visible == false){
+                        return false;
                     }
                     if(client.prop.get_sync(iface_name, "PlaybackStatus").dup_string() == "Playing"){
                         return true;
